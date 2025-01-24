@@ -1,6 +1,6 @@
-# NiFi Docker Compose
+# Apache Nifi Production Setup
 ```
-nifi-production/
+apache-nifi/
 ├── docker-compose.yml
 ├── Dockerfile
 ├── security/
