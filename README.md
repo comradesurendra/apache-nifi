@@ -1,202 +1,170 @@
-# Apache Nifi Production Setup
+# Apache NiFi Production Setup
+
+## Table of Contents
+- [Project Overview](#project-overview)
+- [Project Structure](#project-structure)
+- [Prerequisites](#prerequisites)
+- [Security Setup](#security-setup)
+- [Installation & Deployment](#installation--deployment)
+- [Configuration](#configuration)
+- [Monitoring & Management](#monitoring--management)
+- [Troubleshooting](#troubleshooting)
+
+## Project Overview
+This project provides a production-ready Apache NiFi setup using Docker containers with clustering capabilities, security configurations, and performance optimizations. It includes MongoDB and MySQL connectivity support out of the box.
+
+## Project Structure
 ```
 apache-nifi/
-├── docker-compose.yml
-├── Dockerfile
-├── security/
-├── data/
-│   ├── flow/
-│   ├── content/
-│   ├── database/
-│   ├── provenance/
-│   └── state/
+├── docker-compose.yml    # Container orchestration configuration
+├── Dockerfile            # NiFi image customization
+├── security/             # SSL/TLS certificates and keys
+│   ├── keystore.jks     # Java keystore for SSL/TLS
+│   ├── truststore.jks   # Java truststore for SSL/TLS
+│   └── nifi.crt         # NiFi certificate
+├── data/                # Persistent data storage
+│   ├── flow/            # NiFi flow configurations
+│   ├── content/         # Flow file content repository
+│   ├── database/        # H2 database files
+│   ├── provenance/      # Provenance event records
+│   └── state/           # Component state management
+└── zookeeper-data/      # ZooKeeper data persistence
 ```
 
-# Stop and remove all containers/volumes
-```
+## Prerequisites
+- Docker Engine (20.10.0 or later)
+- Docker Compose (2.0.0 or later)
+- Java keytool (for certificate generation)
+- Minimum 8GB RAM available
+- 4 CPU cores recommended
+
+## Security Setup
+
+### 1. Create Required Directories
+```bash
+# Clean up existing data (if any)
 docker-compose down -v
-```
-
-# Delete all local data/certs
-```
 rm -rf data security
-```
 
-# Recreate directory structure
-```
+# Create directory structure
 mkdir -p security data/{flow,content,database,provenance,state}
 cd security
 ```
 
-
-# Generate keystore with "localhost" as CN (critical for local development)
-```
+### 2. Generate SSL Certificates
+```bash
+# Generate keystore
 keytool -genkeypair -alias nifi -keyalg RSA -keysize 4096 \
   -keystore keystore.jks -validity 365 \
   -storepass keystorePassword -keypass keyPassword \
-  -dname "CN=localhost"  # <<< MUST match your access URL
+  -dname "CN=localhost"  # Change CN to match your domain
+
+# Export certificate
+keytool -exportcert -alias nifi -keystore keystore.jks \
+  -storepass keystorePassword -file nifi.crt
+
+# Import into truststore
+keytool -importcert -alias nifi -file nifi.crt \
+  -keystore truststore.jks -storepass truststorePassword \
+  -noprompt
 ```
 
-# Generate truststore (optional but recommended)
-```
-keytool -exportcert -alias nifi -keystore keystore.jks -storepass keystorePassword -file nifi.crt
-keytool -import -file nifi.crt -alias nifi -keystore truststore.jks -storepass truststorePassword -noprompt 
-```
-# Dockerfile
-``` 
-# Use the official Apache NiFi image
-FROM apache/nifi:2.1.0
+## Installation & Deployment
 
-# Switch to root for package installation
-USER root
-
-# Install wget, download drivers, and clean up
-RUN mkdir -p /var/lib/apt/lists/partial && \
-    apt-get update && \
-    apt-get install -y wget && \
-    # Download MongoDB Java drivers
-    wget -P /opt/nifi/nifi-current/lib/ \
-    https://repo1.maven.org/maven2/org/mongodb/mongodb-driver-sync/4.11.0/mongodb-driver-sync-4.11.0.jar && \
-    wget -P /opt/nifi/nifi-current/lib/ \
-    https://repo1.maven.org/maven2/org/mongodb/bson/4.11.0/bson-4.11.0.jar && \
-    wget -P /opt/nifi/nifi-current/lib/ \
-    https://repo1.maven.org/maven2/org/mongodb/mongodb-driver-core/4.11.0/mongodb-driver-core-4.11.0.jar && \
-    # Download MySQL JDBC driver
-    wget -P /opt/nifi/nifi-current/lib/ \
-    https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/8.0.33/mysql-connector-j-8.0.33.jar && \
-    # Ensure NiFi user owns the files
-    chown -R nifi:nifi /opt/nifi/nifi-current/lib/ && \
-    # Clean up
-    apt-get purge -y wget && \
-    apt-get autoremove -y && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# Copy custom TLS certificates (optional; better to use volumes)
-COPY security/keystore.jks /opt/nifi/nifi-current/security/
-COPY security/truststore.jks /opt/nifi/nifi-current/security/
-
-# Ensure proper permissions for security files
-USER root
-RUN chown -R nifi:nifi /opt/nifi/nifi-current/security/
-USER nifi
-```
-
-# compose yaml file 
-```
-version: "3.8"
-services:
-  nifi:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "8443:8443"
-      - "8080:8080"
-    environment:
-      # HTTPS Configuration
-      - NIFI_WEB_HTTPS_PORT=8443
-      - NIFI_SECURITY_KEYSTORE=/opt/nifi/nifi-current/security/keystore.jks
-      - NIFI_SECURITY_KEYSTORE_TYPE=JKS
-      - NIFI_SECURITY_KEYSTORE_PASSWD=keystorePassword
-      - NIFI_SECURITY_KEY_PASSWD=keyPassword
-      - NIFI_SECURITY_TRUSTSTORE=/opt/nifi/nifi-current/security/truststore.jks
-      - NIFI_SECURITY_TRUSTSTORE_TYPE=JKS
-      - NIFI_SECURITY_TRUSTSTORE_PASSWD=truststorePassword
-
-      # Single-User Auth
-      - NIFI_SECURITY_USER_LOGIN_IDENTITY_PROVIDER=single-user-provider
-      - NIFI_SECURITY_USER_SINGLE_USER_CREDENTIALS_USERNAME=admin
-      - NIFI_SECURITY_USER_SINGLE_USER_CREDENTIALS_PASSWORD=adminPassword123!
-      - NIFI_SENSITIVE_PROPS_KEY=mySuperSecretKey123!
-
-      # Clustering Configuration
-      - NIFI_CLUSTER_IS_NODE=true
-      - NIFI_CLUSTER_NODE_PROTOCOL_PORT=8082
-      - NIFI_CLUSTER_NODE_ADDRESS=nifi
-      - NIFI_ZK_CONNECT_STRING=zookeeper:2181
-      - NIFI_ELECTION_MAX_WAIT=1 min
-
-      # Performance and Resource Management
-      - NIFI_JVM_HEAP_INIT=2g
-      - NIFI_JVM_HEAP_MAX=4g
-      - NIFI_WEB_HTTP_HOST=0.0.0.0
-      - NIFI_FLOWFILE_REPOSITORY_ALWAYS_SYNC=true
-    volumes:
-      - ./security:/opt/nifi/nifi-current/security
-      - ./data:/opt/nifi/nifi-current/data
-    networks:
-      - nifi-net
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 8G
-        reservations:
-          cpus: '1.0'
-          memory: 4G
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
-        window: 120s
-    healthcheck:
-      test: ["CMD", "curl", "-k", "-f", "https://localhost:8443/nifi-api/system-diagnostics"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 45s
-    depends_on:
-      - zookeeper
-
-  zookeeper:
-    image: zookeeper:3.8
-    ports:
-      - "2181:2181"
-    environment:
-      ZOO_MY_ID: 1
-      ZOO_SERVERS: server.1=zookeeper:2888:3888;2181
-    volumes:
-      - ./zookeeper-data:/data
-      - ./zookeeper-datalog:/datalog
-    networks:
-      - nifi-net
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
-        window: 120s
-    healthcheck:
-      test: ["CMD", "zkServer.sh", "status"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-
-networks:
-  nifi-net:
-    driver: bridge
-```
-
-# Run Docker Compose
-```
+### 1. Build and Start Services
+```bash
+# Start NiFi and ZooKeeper containers
 docker-compose up -d
+
+# Monitor container startup
+docker-compose logs -f
 ```
 
-# Get Username and Password
-```
+### 2. Access NiFi Interface
+- Web UI: https://localhost:8443/nifi
+- Default credentials:
+  - Username: admin
+  - Password: adminPassword123!
+  
+### 2.1 Obtain Access Token
+```bash
 docker-compose logs nifi --tail 100 2>&1 | grep -A 1 -B 1 "Generated Username"
-``` 
+```
 
-# Get Flows
+## Configuration
+
+### Key Environment Variables
+```yaml
+# HTTPS Configuration
+NIFI_WEB_HTTPS_PORT: 8443
+NIFI_SECURITY_KEYSTORE_PASSWD: keystorePassword
+NIFI_SECURITY_KEY_PASSWD: keyPassword
+NIFI_SECURITY_TRUSTSTORE_PASSWD: truststorePassword
+
+# Authentication
+NIFI_SECURITY_USER_LOGIN_IDENTITY_PROVIDER: single-user-provider
+NIFI_SECURITY_USER_SINGLE_USER_CREDENTIALS_USERNAME: admin
+NIFI_SECURITY_USER_SINGLE_USER_CREDENTIALS_PASSWORD: adminPassword123!
+
+# Performance Tuning
+NIFI_JVM_HEAP_INIT: 2g
+NIFI_JVM_HEAP_MAX: 4g
 ```
-curl -k -H "Authorization: Bearer $TOKEN" https://localhost:8443/nifi-api/flows
+
+### Clustering Configuration
+```yaml
+NIFI_CLUSTER_IS_NODE: true
+NIFI_CLUSTER_NODE_PROTOCOL_PORT: 8082
+NIFI_CLUSTER_NODE_ADDRESS: nifi
+NIFI_ZK_CONNECT_STRING: zookeeper:2181
+NIFI_ELECTION_MAX_WAIT: 1 min
 ```
+
+## Monitoring & Management
+
+### Health Checks
+```bash
+# Check NiFi system diagnostics
+curl -k -H "Authorization: Bearer $TOKEN" https://localhost:8443/nifi-api/system-diagnostics
+
+# View container logs
+docker-compose logs nifi --tail 100
+```
+
+### Resource Management
+- CPU Limits: 2.0 cores
+- Memory Limits: 8GB
+- Memory Reservations: 4GB
+
+## Troubleshooting
+
+### Common Issues
+1. **Certificate Issues**
+   - Verify CN matches the access URL
+   - Check certificate permissions in container
+   - Ensure truststore contains the correct certificate
+
+2. **Connection Issues**
+   - Verify ports are not in use
+   - Check firewall settings
+   - Ensure ZooKeeper is running for clustering
+
+3. **Performance Issues**
+   - Monitor JVM heap usage
+   - Check system resources
+   - Adjust container resource limits
+
+### Accessing Logs
+```bash
+# View NiFi logs
+docker-compose logs nifi --tail 100
+
+# View ZooKeeper logs
+docker-compose logs zookeeper
+```
+
+### Getting Support
+- Official Documentation: https://nifi.apache.org/docs.html
+- GitHub Issues: https://github.com/apache/nifi/issues
+- NiFi Mailing Lists: https://nifi.apache.org/mailing_lists.html
 
