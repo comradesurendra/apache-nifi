@@ -82,6 +82,29 @@ docker-compose logs -f
 
 ### 2. Access NiFi Interface
 - Web UI: https://localhost:8443/nifi
+
+### 2.1 First Time Login
+On first startup, NiFi generates unique credentials for security. Follow these steps to obtain them:
+
+```bash
+# View the generated credentials in container logs
+docker-compose logs nifi | grep -A 1 "Generated Username"
+```
+
+The output will show your username and password. Use these credentials to log in to the web interface.
+
+**Note:** The default credentials shown below are for reference only and will not work. Always use the generated credentials from the logs:
+- Username: admin
+- Password: adminPassword123!
+
+### 2.2 Obtain Access Token
+```bash
+# After successful login, you can get your access token with
+curl -k -X POST -H "Content-Type: application/x-www-form-urlencoded; charset=UTF-8" \
+  -d "username=YOUR_USERNAME&password=YOUR_PASSWORD" \
+  https://localhost:8443/nifi-api/access/token
+```
+```
 - Default credentials:
   - Username: admin
   - Password: adminPassword123!
