@@ -10,6 +10,7 @@ services:
       - "8080:8080"
     environment:
       - NIFI_WEB_HTTPS_PORT=8443
+      - NIFI_WEB_PROXY_HOST=192.168.17.184 # Need to add the server ip
       - NIFI_SECURITY_KEYSTORE=/opt/nifi/nifi-current/security/keystore.jks
       - NIFI_SECURITY_KEYSTORE_TYPE=JKS
       - NIFI_SECURITY_KEYSTORE_PASSWD=keystorePassword
