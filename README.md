@@ -59,6 +59,12 @@ cd security
 ### 2. Generate SSL Certificates
 
 ```bash
+# Updated config
+keytool -genkeypair -keystore keystore.jks -alias nifi \
+  -ext "SAN=IP:192.168.17.184,DNS:localhost,DNS:nifi" \
+  -validity 365 -keyalg RSA -keysize 4096 \
+  -storepass keystorePassword -keypass keyPassword
+
 # Generate keystore
 keytool -genkeypair -alias nifi -keyalg RSA -keysize 4096 \
   -keystore keystore.jks -validity 365 \
