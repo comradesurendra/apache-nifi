@@ -10,7 +10,8 @@ services:
     environment:
       # HTTPS Configuration
       - NIFI_WEB_HTTPS_PORT=8443
-      - NIFI_WEB_PROXY_HOST=192.168.17.184 # Need to add the server ip
+      - NIFI_WEB_PROXY_HOST=192.168.17.184:8443,localhost:8443,nifi:8443,192.168.17.184,nifi,localhost 
+      - NIFI_SECURITY_NEED_CLIENT_AUTH=false
       - NIFI_SECURITY_KEYSTORE=/opt/nifi/nifi-current/security/keystore.jks
       - NIFI_SECURITY_KEYSTORE_TYPE=JKS
       - NIFI_SECURITY_KEYSTORE_PASSWD=keystorePassword
@@ -24,76 +25,89 @@ services:
       - NIFI_SECURITY_USER_SINGLE_USER_CREDENTIALS_USERNAME=admin
       - NIFI_SECURITY_USER_SINGLE_USER_CREDENTIALS_PASSWORD=adminPassword123!
       - NIFI_SENSITIVE_PROPS_KEY=mySuperSecretKey123!
+      - NIFI_CLUSTER_IS_NODE=false
+      - NIFI_REMOTE_INPUT_HOST=nifi
+      - NIFI_WEB_HTTP_HOST=0.0.0.0
+      - NIFI_WEB_JETTY_HEADER_SIZE=16384  # Prevents buffer overflow errors
 
-      # Clustering Configuration
-      - NIFI_CLUSTER_IS_NODE=true
-      - NIFI_CLUSTER_NODE_PROTOCOL_PORT=8082
-      - NIFI_CLUSTER_NODE_ADDRESS=nifi
-      - NIFI_ZK_CONNECT_STRING=zookeeper:2181
-      - NIFI_ELECTION_MAX_WAIT=1 min
 
       # Performance and Resource Management
-      - NIFI_JVM_HEAP_INIT=2g
-      - NIFI_JVM_HEAP_MAX=4g
-      - NIFI_WEB_HTTP_HOST=0.0.0.0
+      - NIFI_JVM_HEAP_INIT=24g  # Increased from 16g
+      - NIFI_JVM_HEAP_MAX=24g
+      - NIFI_JVM_ADDITIONAL_OPTS=-XX:MaxDirectMemorySize=32g -XX:+UseZGC -XX:NativeMemoryTracking=detail
       - NIFI_FLOWFILE_REPOSITORY_ALWAYS_SYNC=true
+      - NIFI_JVM_ADDITIONAL_OPTS=-Djetty.sslContext.skipValidation=true
+      # - NIFI_JVM_ADDITIONAL_OPTS=-Djava.security.properties=/opt/nifi/nifi-current/conf/java.security
+     
+      # CaptureChangeMySQL Configuration
+      - NIFI_CAPTURE_CHANGE_MYSQL_BINLOG_EVENT_BUFFER_SIZE=1048576  # 1MB
+      - NIFI_CAPTURE_CHANGE_MYSQL_POLL_TIME=2000  # 5 seconds
+      - NIFI_CAPTURE_CHANGE_MYSQL_MAX_QUEUE_SIZE=2000  # Reduced from 10k
+      - NIFI_CAPTURE_CHANGE_MYSQL_QUEUE_TIMEOUT=5000  # 5s timeout [2]
+      - NIFI_PROCESSOR_CONCURRENT_TASKS=18  # Set to desired number of concurrent tasks
+
+      # Addons
+      - NIFI_FLOWENGINE_EVENT_DRIVEN_THREADS=20
+      - NIFI_FLOWENGINE_TIMER_DRIVEN_THREADS=40
+
+
+      # Additional Setting
+      # ---- Flow Control
+      - NIFI_FLOWFILE_REPOSITORY_PARTITIONS=128  # Default 128 might be excessive
+      - NIFI_CONTENT_REPOSITORY_ARCHIVE_ENABLED=true
+      - NIFI_CONTENT_REPOSITORY_ARCHIVE_MAX_USAGE_PERCENTAGE=70
+      - NIFI_CONTENT_REPOSITORY_ARCHIVE_MAX_RETENTION_PERIOD=7d
+      # ---- Failing Handling
+      - NIFI_CAPTURE_CHANGE_MYSQL_RETRIES=3
+      - NIFI_RETRY_INTERVAL=30000  # 30s
+      # - NIFI_METRICS_PROMETHEUS_ENDPOINT=/metrics
+
+      # Nifi Disk Space Safeguard
+      # - NIFI_CONTENT_REPOSITORY_DIRECTORY=/mnt/nifi-content
+      # - NIFI_DATABASE_REPOSITORY_DIRECTORY=/mnt/nifi-db
+
+      # Critical Process Isolation
+      - NIFI_PROCESS_SCHEDULER=1  # 0=All,1=PrimaryNodeOnly
+      - NIFI_SWAP_THRESHOLD=20000  # Default 2000 too low
+
+      # GTID Recovery 
+      # - NIFI_CAPTURE_CHANGE_MYSQL_GTID_POSITION_FILE=/mnt/nifi-gtid/position.dat
+      # - NIFI_CAPTURE_CHANGE_MYSQL_GTID_SKIP_COUNT=3
+
     volumes:
       - ./security:/opt/nifi/nifi-current/security
       - ./data:/opt/nifi/nifi-current/data
     networks:
       - nifi-net
-    deploy:
+    deploy:  # CORRECT PLACEMENT FOR RESTART POLICY
       resources:
         limits:
-          cpus: '2.0'
-          memory: 8G
+          cpus: '20.0'
+          memory: 56G
         reservations:
-          cpus: '1.0'
-          memory: 4G
-      restart_policy:
+          cpus: '8.0'
+          memory: 32G
+      restart_policy:  # MOVED FROM ULIMITS
         condition: on-failure
         delay: 5s
         max_attempts: 3
         window: 120s
+    ulimits:  # PROPERLY CONFIGURED LIMITS
+      nofile:
+        soft: 1000000
+        hard: 1000000
+      nproc:
+        soft: 65535
+        hard: 65535
+      memlock:  # ADD IF USING MEMORY-INTENSIVE WORKLOADS
+        soft: -1
+        hard: -1
     healthcheck:
-      test: ["CMD", "curl", "-k", "-f", "https://localhost:8443/nifi-api/system-diagnostics"]
+      test: ["CMD", "curl", "-k", "-f", "https://localhost:8443/nifi-api/access/config"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 45s
-    depends_on:
-      - zookeeper
-
-  zookeeper:
-    image: zookeeper:3.8
-    ports:
-      - "2181:2181"
-    environment:
-      ZOO_MY_ID: 1
-      ZOO_SERVERS: server.1=zookeeper:2888:3888;2181
-    volumes:
-      - ./zookeeper-data:/data
-      - ./zookeeper-datalog:/datalog
-    networks:
-      - nifi-net
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
-        window: 120s
-    healthcheck:
-      test: ["CMD", "zkServer.sh", "status"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
 
 networks:
   nifi-net:
